@@ -4,7 +4,8 @@ $python = Join-Path $projectRoot ".venv\Scripts\python.exe"
 $systems = @(
     @{ Name = "identity"; Module = "systems.identity_app:app"; Port = 9001 },
     @{ Name = "catalog"; Module = "systems.catalog_app:app"; Port = 9002 },
-    @{ Name = "finance"; Module = "systems.finance_app:app"; Port = 9003 },
+    @{ Name = "finance-1"; Module = "systems.finance_app:app"; Port = 9003 },
+    @{ Name = "finance-2"; Module = "systems.finance_app:app"; Port = 9005 },
     @{ Name = "observability"; Module = "systems.observability_app:app"; Port = 9004 }
 )
 
