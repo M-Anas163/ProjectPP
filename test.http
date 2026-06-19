@@ -1,0 +1,56 @@
+@GATEWAY = http://localhost:8000
+@IDENTITY = http://localhost:9001
+@CATALOG = http://localhost:9002
+@FINANCE = http://localhost:9003
+@OBSERVABILITY = http://localhost:9004
+
+GET {{GATEWAY}}/
+
+###
+
+GET {{CATALOG}}/products
+
+###
+
+POST {{IDENTITY}}/users
+Content-Type: application/json
+
+{
+  "email": "user@example.com",
+  "password": "password123"
+}
+
+###
+
+POST {{CATALOG}}/products
+Content-Type: application/json
+
+{
+  "name": "Parallel Programming Book",
+  "description": "A simple product for testing checkout.",
+  "price": 25.50,
+  "stock_quantity": 20
+}
+
+###
+
+POST {{FINANCE}}/orders/checkout
+Content-Type: application/json
+
+{
+  "user_id": 1,
+  "items": [
+    {
+      "product_id": 1,
+      "quantity": 2
+    }
+  ]
+}
+
+###
+
+GET {{FINANCE}}/reports/summary
+
+###
+
+GET {{OBSERVABILITY}}/ops/benchmarks
