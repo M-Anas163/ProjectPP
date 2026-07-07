@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Request, status
+import os
+
+from fastapi import APIRouter, Header, Request, status
 
 from schemas import (
     CheckoutRequest,
@@ -8,6 +10,7 @@ from schemas import (
     PaymentStatusUpdate,
 )
 from services.capacity_service import capacity_limited
+from services.cache_service import cache_service
 from services.inventory_service import adjust_inventory
 from services.invoice_service import issue_invoice
 from services.order_service import (
@@ -30,24 +33,41 @@ router = APIRouter(tags=["finance"])
 @rate_limited(max_requests=60, window_seconds=60)
 @capacity_limited(name="finance-inventory", max_concurrent=10)
 def update_inventory(request: Request, payload: InventoryAdjustment):
-    return adjust_inventory(
+    result = adjust_inventory(
         product_id=payload.product_id,
         change_amount=payload.change_amount,
         reason=payload.reason,
         order_id=payload.order_id,
     )
+    cache_service.invalidate_prefix("products")
+    return result
 
 
 @router.post("/orders/checkout", status_code=status.HTTP_201_CREATED)
 @performance_logged
-@rate_limited(max_requests=30, window_seconds=60)
-@capacity_limited(name="finance-checkout", max_concurrent=10)
-def checkout(request: Request, payload: CheckoutRequest):
+@rate_limited(
+    max_requests=int(os.getenv("FINANCE_CHECKOUT_RATE_LIMIT", "6000")),
+    window_seconds=60,
+)
+@capacity_limited(
+    name="finance-checkout",
+    max_concurrent=int(os.getenv("FINANCE_CHECKOUT_CONCURRENCY", "8")),
+)
+def checkout(
+    request: Request,
+    payload: CheckoutRequest,
+    idempotency_key: str = Header(
+        min_length=8,
+        max_length=128,
+        alias="Idempotency-Key",
+    ),
+):
     result = checkout_order(
         user_id=payload.user_id,
         items=[item.model_dump() for item in payload.items],
+        idempotency_key=idempotency_key,
     )
-    result["invoice_job"] = issue_invoice(order_id=result["order_id"])
+    cache_service.invalidate_prefix("products")
     return result
 
 

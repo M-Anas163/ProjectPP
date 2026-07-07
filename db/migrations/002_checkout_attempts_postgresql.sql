@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS checkout_attempts (
+    idempotency_key VARCHAR(128) PRIMARY KEY,
+    request_hash VARCHAR(64) NOT NULL,
+    order_id INTEGER NULL UNIQUE REFERENCES orders (id),
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

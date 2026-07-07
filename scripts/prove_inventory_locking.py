@@ -29,6 +29,7 @@ def run_checkout_race(user_id: int, product_id: int, attempts: int) -> list[dict
             result = checkout_order(
                 user_id=user_id,
                 items=[{"product_id": product_id, "quantity": 1}],
+                idempotency_key=f"locking-proof-{uuid4().hex}",
             )
             return {"index": index, "ok": True, "result": result}
         except HTTPException as exc:
@@ -68,7 +69,7 @@ def count_order_items(product_id: int) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Prove optimistic locking prevents inventory overselling."
+        description="Prove atomic inventory reservation prevents overselling."
     )
     parser.add_argument("--attempts", type=int, default=50)
     parser.add_argument("--stock", type=int, default=1)
@@ -144,7 +145,7 @@ def main() -> None:
         f"expected {len(successes)} order items, got {order_item_count}"
     )
 
-    print("PASS: optimistic locking prevented overselling under concurrent checkout.")
+    print("PASS: atomic reservation prevented overselling under concurrent checkout.")
 
 
 if __name__ == "__main__":

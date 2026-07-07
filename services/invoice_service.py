@@ -1,5 +1,3 @@
-import time
-
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -7,6 +5,21 @@ from sqlalchemy.orm import Session
 from db.models import Invoice, Order
 from services.async_queue_service import queued_job
 from services.transaction_service import transactional
+
+
+def create_invoice(*, order_id: int, db: Session) -> Invoice:
+    existing_invoice = db.scalar(select(Invoice).where(Invoice.order_id == order_id))
+    if existing_invoice is not None:
+        return existing_invoice
+
+    invoice = Invoice(
+        order_id=order_id,
+        invoice_number=f"INV-{order_id}",
+        status="issued",
+    )
+    db.add(invoice)
+    db.flush()
+    return invoice
 
 
 @queued_job("issue_invoice")
@@ -19,15 +32,5 @@ def issue_invoice(*, order_id: int, db: Session) -> dict:
             detail="Order not found",
         )
 
-    existing_invoice = db.scalar(select(Invoice).where(Invoice.order_id == order_id))
-    if existing_invoice is not None:
-        return {"invoice_id": existing_invoice.id, "status": existing_invoice.status}
-
-    invoice = Invoice(
-        order_id=order_id,
-        invoice_number=f"INV-{order_id}-{int(time.time())}",
-        status="issued",
-    )
-    db.add(invoice)
-    db.flush()
+    invoice = create_invoice(order_id=order_id, db=db)
     return {"invoice_id": invoice.id, "status": invoice.status}

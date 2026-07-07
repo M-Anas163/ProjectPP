@@ -1,10 +1,24 @@
+import hashlib
+import json
+from collections import defaultdict
 from decimal import Decimal
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.dialects.mysql import insert as mysql_insert
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.orm import Session
 
-from db.models import Order, OrderItem, OrderStatus, Payment, User
+from db.models import (
+    CheckoutAttempt,
+    Invoice,
+    Order,
+    OrderItem,
+    OrderStatus,
+    Payment,
+    User,
+)
+from services.invoice_service import create_invoice
 from services.inventory_service import reserve_product_stock
 from services.transaction_service import transactional, with_session
 
@@ -44,13 +58,118 @@ def _order_to_dict(db: Session, order: Order) -> dict:
     }
 
 
+def _checkout_request_hash(user_id: int, items: list[tuple[int, int]]) -> str:
+    payload = json.dumps(
+        {"user_id": user_id, "items": items},
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _checkout_result(db: Session, order: Order, *, replayed: bool) -> dict:
+    payment = db.scalar(select(Payment).where(Payment.order_id == order.id))
+    invoice = db.scalar(select(Invoice).where(Invoice.order_id == order.id))
+    if payment is None or invoice is None:
+        raise RuntimeError(f"Committed checkout {order.id} is incomplete")
+    return {
+        "order_id": order.id,
+        "payment_id": payment.id,
+        "invoice_id": invoice.id,
+        "status": order.status.value,
+        "total_amount": str(order.total_amount),
+        "idempotent_replay": replayed,
+    }
+
+
+def _lock_checkout_attempt(
+    db: Session,
+    *,
+    idempotency_key: str,
+    request_hash: str,
+) -> CheckoutAttempt:
+    values = {
+        "idempotency_key": idempotency_key,
+        "request_hash": request_hash,
+    }
+    dialect = db.get_bind().dialect.name
+    if dialect in {"mysql", "mariadb"}:
+        statement = mysql_insert(CheckoutAttempt).values(**values)
+        db.execute(
+            statement.on_duplicate_key_update(
+                idempotency_key=statement.inserted.idempotency_key
+            )
+        )
+    elif dialect == "postgresql":
+        statement = postgresql_insert(CheckoutAttempt).values(**values)
+        db.execute(
+            statement.on_conflict_do_update(
+                index_elements=[CheckoutAttempt.idempotency_key],
+                set_={"idempotency_key": statement.excluded.idempotency_key},
+            )
+        )
+    else:
+        attempt = db.get(CheckoutAttempt, idempotency_key)
+        if attempt is None:
+            attempt = CheckoutAttempt(**values)
+            db.add(attempt)
+            db.flush()
+
+    attempt_query = select(CheckoutAttempt).where(
+        CheckoutAttempt.idempotency_key == idempotency_key
+    )
+    if dialect not in {"mysql", "mariadb", "postgresql"}:
+        attempt_query = attempt_query.with_for_update()
+    attempt = db.scalar(attempt_query)
+    if attempt is None:
+        raise RuntimeError("Failed to create or lock checkout idempotency record")
+    if attempt.request_hash != request_hash:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Idempotency-Key was already used for a different checkout",
+        )
+    return attempt
+
+
 @transactional
-def checkout_order(*, user_id: int, items: list[dict], db: Session) -> dict:
+def checkout_order(
+    *,
+    user_id: int,
+    items: list[dict],
+    idempotency_key: str,
+    db: Session,
+) -> dict:
     if not items:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Order must contain at least one item",
         )
+
+    quantities: dict[int, int] = defaultdict(int)
+    for item in items:
+        product_id = int(item["product_id"])
+        quantity = int(item["quantity"])
+        if quantity <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Quantity must be greater than zero",
+            )
+        quantities[product_id] += quantity
+
+    normalized_items = sorted(quantities.items())
+    request_hash = _checkout_request_hash(user_id, normalized_items)
+    checkout_attempt = _lock_checkout_attempt(
+        db,
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+    )
+    if checkout_attempt.order_id is not None:
+        existing_order = db.get(Order, checkout_attempt.order_id)
+        if existing_order is None:
+            raise RuntimeError(
+                f"Checkout attempt points to missing order {checkout_attempt.order_id}"
+            )
+        return _checkout_result(db, existing_order, replayed=True)
 
     if db.get(User, user_id) is None:
         raise HTTPException(
@@ -58,14 +177,18 @@ def checkout_order(*, user_id: int, items: list[dict], db: Session) -> dict:
             detail="User not found",
         )
 
-    order = Order(user_id=user_id, status=OrderStatus.pending, total_amount=Decimal("0"))
+    order = Order(
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+        user_id=user_id,
+        status=OrderStatus.pending,
+        total_amount=Decimal("0"),
+    )
     db.add(order)
     db.flush()
 
     total_amount = Decimal("0")
-    for item in items:
-        product_id = int(item["product_id"])
-        quantity = int(item["quantity"])
+    for product_id, quantity in normalized_items:
         unit_price = reserve_product_stock(
             db,
             product_id=product_id,
@@ -89,11 +212,16 @@ def checkout_order(*, user_id: int, items: list[dict], db: Session) -> dict:
     db.add(payment)
     db.flush()
 
+    invoice = create_invoice(order_id=order.id, db=db)
+    checkout_attempt.order_id = order.id
+
     return {
         "order_id": order.id,
         "payment_id": payment.id,
+        "invoice_id": invoice.id,
         "status": order.status.value,
         "total_amount": str(total_amount),
+        "idempotent_replay": False,
     }
 
 

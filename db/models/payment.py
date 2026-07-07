@@ -11,7 +11,11 @@ class Payment(Base):
     __tablename__ = "payments"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
-    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"), index=True)
+    order_id: Mapped[int] = mapped_column(
+        ForeignKey("orders.id"),
+        unique=True,
+        index=True,
+    )
     status: Mapped[str] = mapped_column(String(50))
     amount: Mapped[Decimal] = mapped_column(Numeric(10, 2))
     created_at: Mapped[datetime] = mapped_column(

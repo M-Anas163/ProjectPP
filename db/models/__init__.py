@@ -1,4 +1,5 @@
 from .background_job_log import BackgroundJobLog
+from .checkout_attempt import CheckoutAttempt
 from .inventory_movement import InventoryMovement
 from .invoice import Invoice
 from .order import Order, OrderStatus
@@ -10,6 +11,7 @@ from .user import User
 
 __all__ = [
     "BackgroundJobLog",
+    "CheckoutAttempt",
     "InventoryMovement",
     "Invoice",
     "Order",

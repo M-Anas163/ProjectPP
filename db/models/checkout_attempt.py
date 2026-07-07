@@ -6,17 +6,16 @@ from sqlalchemy.orm import Mapped, mapped_column
 from db.database import Base
 
 
-class Invoice(Base):
-    __tablename__ = "invoices"
+class CheckoutAttempt(Base):
+    __tablename__ = "checkout_attempts"
 
-    id: Mapped[int] = mapped_column(primary_key=True, index=True)
-    order_id: Mapped[int] = mapped_column(
+    idempotency_key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    request_hash: Mapped[str] = mapped_column(String(64))
+    order_id: Mapped[int | None] = mapped_column(
         ForeignKey("orders.id"),
         unique=True,
-        index=True,
+        nullable=True,
     )
-    invoice_number: Mapped[str] = mapped_column(String(100), unique=True, index=True)
-    status: Mapped[str] = mapped_column(String(50))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

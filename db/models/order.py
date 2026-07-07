@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 from enum import Enum
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, func
+from sqlalchemy import DateTime, ForeignKey, Numeric, String, func
 from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -20,6 +20,12 @@ class Order(Base):
     __tablename__ = "orders"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    idempotency_key: Mapped[str] = mapped_column(
+        String(128),
+        unique=True,
+        index=True,
+    )
+    request_hash: Mapped[str] = mapped_column(String(64))
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     status: Mapped[OrderStatus] = mapped_column(
         SqlEnum(OrderStatus, name="order_status"),
